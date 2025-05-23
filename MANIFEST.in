@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+recursive-include prolabdep/web/templates *
+recursive-include prolabdep/web/static *
+recursive-include docs *
+recursive-include examples *
+recursive-include tests * 
