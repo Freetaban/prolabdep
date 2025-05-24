@@ -7,55 +7,29 @@ from typing import Dict, List, Union, Optional, Any, Tuple
 import re
 import logging
 
+from ..utils.units import unit_manager
+
 logger = logging.getLogger(__name__)
 
 
 class MassFlowCalculator:
     """
-    Mass flow calculator for wastewater treatment plant data
+    Mass flow calculator for wastewater treatment plant data using Pint for unit handling
     
     This class provides methods for calculating mass flows based on
-    concentration data and flow rates.
+    concentration data and flow rates with proper unit conversions.
     """
     
-    # Unit conversion factors
-    CONVERSION_FACTORS = {
-        'concentration': {
-            'mg/l': 1.0,
-            'g/l': 1000.0,
-            'µg/l': 0.001,
-            'ng/l': 0.000001,
-            'MG/L': 1.0,
-            'G/L': 1000.0,
-            'UG/L': 0.001,
-            'NG/L': 0.000001
-        },
-        'flow': {
-            'm3/h': 1.0,
-            'm3/d': 1.0/24.0,
-            'l/s': 3.6,
-            'l/min': 0.06,
-            'l/h': 0.001
-        },
-        'mass_flow': {
-            'kg/h': 1.0,
-            'kg/d': 1.0/24.0,
-            'g/h': 0.001,
-            'g/d': 0.001/24.0,
-            't/y': 8760.0  # kg/h to tonnes/year
-        }
-    }
-    
     def __init__(self):
-        """Initialize mass flow calculator"""
-        pass
+        """Initialize mass flow calculator with Pint unit manager"""
+        self.unit_manager = unit_manager
     
     def calculate_mass_flow(self, concentration: float, flow: float,
-                           concentration_unit: str = 'mg/l',
-                           flow_unit: str = 'm3/h',
+                           concentration_unit: str = 'mg/L',
+                           flow_unit: str = 'm³/h',
                            output_unit: str = 'kg/h') -> float:
         """
-        Calculate mass flow from concentration and flow rate
+        Calculate mass flow from concentration and flow rate using Pint
         
         Parameters
         ----------
@@ -64,9 +38,9 @@ class MassFlowCalculator:
         flow : float
             Flow rate value
         concentration_unit : str
-            Unit of concentration (e.g., 'mg/l', 'g/l')
+            Unit of concentration (e.g., 'mg/L', 'g/L')
         flow_unit : str
-            Unit of flow rate (e.g., 'm3/h', 'l/s')
+            Unit of flow rate (e.g., 'm³/h', 'L/s')
         output_unit : str
             Unit of output mass flow (e.g., 'kg/h', 'kg/d')
             
@@ -74,51 +48,43 @@ class MassFlowCalculator:
         -------
         float
             Mass flow in specified units
+            
+        Raises
+        ------
+        ValueError
+            If units cannot be parsed or are incompatible
         """
-        # Validate units
-        if concentration_unit not in self.CONVERSION_FACTORS['concentration']:
-            raise ValueError(f"Unknown concentration unit: {concentration_unit}")
-        if flow_unit not in self.CONVERSION_FACTORS['flow']:
-            raise ValueError(f"Unknown flow unit: {flow_unit}")
-        if output_unit not in self.CONVERSION_FACTORS['mass_flow']:
-            raise ValueError(f"Unknown mass flow unit: {output_unit}")
-        
-        # Convert concentration to mg/l
-        conc_in_mg_l = concentration * self.CONVERSION_FACTORS['concentration'][concentration_unit]
-        
-        # Convert flow to m3/h
-        flow_in_m3_h = flow * self.CONVERSION_FACTORS['flow'][flow_unit]
-        
-        # Calculate mass flow in kg/h
-        mass_flow_kg_h = conc_in_mg_l * flow_in_m3_h / 1000000  # mg/l * m3/h / 1000000 = kg/h
-        
-        # Convert to desired output unit
-        mass_flow = mass_flow_kg_h / self.CONVERSION_FACTORS['mass_flow'][output_unit]
-        
-        return mass_flow
+        try:
+            return self.unit_manager.calculate_mass_flow(
+                concentration, concentration_unit,
+                flow, flow_unit,
+                output_unit
+            )
+        except Exception as e:
+            logger.error(f"Mass flow calculation failed: {e}")
+            raise ValueError(f"Cannot calculate mass flow: {e}")
     
-    def extract_unit(self, unit_string: str) -> Tuple[str, str]:
+    def extract_unit(self, unit_string: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Extract concentration and flow units from a combined unit string
         
         Parameters
         ----------
         unit_string : str
-            Combined unit string (e.g., 'mg/l', 'm3/h')
+            Combined unit string (e.g., 'mg/L', 'm³/h')
             
         Returns
         -------
-        Tuple[str, str]
-            Tuple of (quantity, time_unit)
+        Tuple[Optional[str], Optional[str]]
+            Tuple of (quantity, time_unit) or (None, None) if parsing fails
         """
-        # Common patterns for units
         if not unit_string:
             return None, None
             
-        unit_string = unit_string.lower()
+        unit_string = unit_string.strip()
         
-        # Extract quantity and time units
-        quantity_match = re.match(r'([a-zµ0-9]+)/([a-z]+)', unit_string)
+        # Extract quantity and time units using regex
+        quantity_match = re.match(r'([a-zµ0-9³²]+)/([a-z]+)', unit_string.lower())
         
         if quantity_match:
             quantity = quantity_match.group(1)
@@ -127,18 +93,59 @@ class MassFlowCalculator:
         
         return unit_string, None
     
+    def validate_units(self, concentration_unit: str, flow_unit: str, output_unit: str) -> bool:
+        """
+        Validate that the units are compatible for mass flow calculation
+        
+        Parameters
+        ----------
+        concentration_unit : str
+            Concentration unit
+        flow_unit : str
+            Flow unit
+        output_unit : str
+            Output mass flow unit
+            
+        Returns
+        -------
+        bool
+            True if units are valid for mass flow calculation
+        """
+        try:
+            # Parse units using Pint
+            conc_qty = self.unit_manager.parse_unit(concentration_unit)
+            flow_qty = self.unit_manager.parse_unit(flow_unit)
+            output_qty = self.unit_manager.parse_unit(output_unit)
+            
+            if any(qty is None for qty in [conc_qty, flow_qty, output_qty]):
+                return False
+            
+            # Check dimensionalities
+            conc_dim = conc_qty.dimensionality
+            flow_dim = flow_qty.dimensionality
+            output_dim = output_qty.dimensionality
+            
+            # Mass flow should be: concentration * flow = (mass/volume) * (volume/time) = mass/time
+            expected_dim = conc_dim * flow_dim
+            
+            return str(expected_dim) == str(output_dim)
+            
+        except Exception as e:
+            logger.warning(f"Unit validation failed: {e}")
+            return False
+    
     def apply_mass_flow_calculation(self, concentration_data: pd.DataFrame, 
                                   flow_data: pd.DataFrame,
                                   output_unit: str = 'kg/h') -> pd.DataFrame:
         """
-        Calculate mass flow for a dataset
+        Calculate mass flow for a dataset using Pint unit handling
         
         Parameters
         ----------
         concentration_data : pd.DataFrame
-            Concentration data with 'date' and 'value' columns
+            Concentration data with 'date', 'value', and optionally 'unit' columns
         flow_data : pd.DataFrame
-            Flow data with 'date' and 'value' columns
+            Flow data with 'date', 'value', and optionally 'unit' columns
         output_unit : str
             Output unit for mass flow
             
@@ -146,15 +153,24 @@ class MassFlowCalculator:
         -------
         pd.DataFrame
             Dataframe with mass flow calculations
+            
+        Raises
+        ------
+        ValueError
+            If required columns are missing or units are incompatible
         """
         # Validate input data
         for df, name in [(concentration_data, 'concentration_data'), (flow_data, 'flow_data')]:
             if 'date' not in df.columns or 'value' not in df.columns:
                 raise ValueError(f"{name} must contain 'date' and 'value' columns")
         
-        # Extract units
-        conc_unit = concentration_data['unit'].iloc[0] if 'unit' in concentration_data.columns else 'mg/l'
-        flow_unit = flow_data['unit'].iloc[0] if 'unit' in flow_data.columns else 'm3/h'
+        # Extract units (with defaults)
+        conc_unit = concentration_data['unit'].iloc[0] if 'unit' in concentration_data.columns else 'mg/L'
+        flow_unit = flow_data['unit'].iloc[0] if 'unit' in flow_data.columns else 'm³/h'
+        
+        # Validate units
+        if not self.validate_units(conc_unit, flow_unit, output_unit):
+            logger.warning(f"Unit validation failed for {conc_unit} * {flow_unit} -> {output_unit}")
         
         # Set datetime index for merging
         conc_df = concentration_data.copy()
@@ -172,7 +188,7 @@ class MassFlowCalculator:
         conc_numeric = conc_df[['value']].copy()
         flow_numeric = flow_df[['value']].copy()
         
-        # Resample to same frequency if needed
+        # Resample to same frequency if needed (daily average)
         conc_resampled = conc_numeric.resample('D').mean()
         flow_resampled = flow_numeric.resample('D').mean()
         
@@ -189,16 +205,20 @@ class MassFlowCalculator:
             'flow': flow_resampled.loc[common_dates, 'value']
         })
         
-        # Calculate mass flow
-        merged_data['mass_flow'] = merged_data.apply(
-            lambda row: self.calculate_mass_flow(
-                row['concentration'], row['flow'], 
-                concentration_unit=conc_unit,
-                flow_unit=flow_unit,
-                output_unit=output_unit
-            ),
-            axis=1
-        )
+        # Calculate mass flow using Pint
+        def calculate_single_mass_flow(row):
+            try:
+                return self.calculate_mass_flow(
+                    row['concentration'], row['flow'],
+                    concentration_unit=conc_unit,
+                    flow_unit=flow_unit,
+                    output_unit=output_unit
+                )
+            except Exception as e:
+                logger.warning(f"Mass flow calculation failed for row: {e}")
+                return np.nan
+        
+        merged_data['mass_flow'] = merged_data.apply(calculate_single_mass_flow, axis=1)
         
         # Reset index for consistent return format
         result = merged_data.reset_index()
@@ -213,6 +233,71 @@ class MassFlowCalculator:
         if 'sampling_point' in concentration_data.columns:
             result['sampling_point'] = concentration_data['sampling_point'].iloc[0]
             
-        result['unit'] = output_unit
+        # Add unit information
+        result['concentration_unit'] = conc_unit
+        result['flow_unit'] = flow_unit
+        result['mass_flow_unit'] = output_unit
         
-        return result 
+        return result
+    
+    def convert_concentration(self, value: float, from_unit: str, to_unit: str) -> float:
+        """
+        Convert concentration from one unit to another
+        
+        Parameters
+        ----------
+        value : float
+            Concentration value
+        from_unit : str
+            Source unit
+        to_unit : str
+            Target unit
+            
+        Returns
+        -------
+        float
+            Converted concentration value
+        """
+        return self.unit_manager.convert_value(value, from_unit, to_unit)
+    
+    def convert_flow(self, value: float, from_unit: str, to_unit: str) -> float:
+        """
+        Convert flow from one unit to another
+        
+        Parameters
+        ----------
+        value : float
+            Flow value
+        from_unit : str
+            Source unit
+        to_unit : str
+            Target unit
+            
+        Returns
+        -------
+        float
+            Converted flow value
+        """
+        return self.unit_manager.convert_value(value, from_unit, to_unit)
+    
+    def get_compatible_units(self, unit_type: str) -> List[str]:
+        """
+        Get list of compatible units for a given type
+        
+        Parameters
+        ----------
+        unit_type : str
+            Type of unit ('concentration', 'flow', or 'mass_flow')
+            
+        Returns
+        -------
+        List[str]
+            List of compatible units
+        """
+        unit_suggestions = {
+            'concentration': ['mg/L', 'g/L', 'kg/m³', 'µg/L', 'ng/L', 'ppm', 'ppb'],
+            'flow': ['m³/h', 'L/s', 'L/min', 'L/h', 'm³/d'],
+            'mass_flow': ['kg/h', 'kg/d', 'g/h', 'g/d', 't/year']
+        }
+        
+        return unit_suggestions.get(unit_type, []) 

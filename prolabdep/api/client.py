@@ -21,6 +21,7 @@ from prolabdep.exporters.excel import ExcelExporter
 from prolabdep.exporters.csv import CSVExporter
 from prolabdep.exporters.pdf import PDFExporter
 from prolabdep.utils.standardization import default_mappings
+from prolabdep.utils.units import unit_manager
 
 logger = logging.getLogger(__name__)
 
@@ -621,4 +622,227 @@ class Client:
         standardized : str
             Standardized parameter name
         """
-        default_mappings.add_parameter_mapping(original, standardized) 
+        default_mappings.add_parameter_mapping(original, standardized)
+    
+    # Unit Management Methods
+    
+    def standardize_unit(self, unit_str: str) -> str:
+        """
+        Standardize a unit string using Pint
+        
+        Parameters
+        ----------
+        unit_str : str
+            Unit string to standardize
+            
+        Returns
+        -------
+        str
+            Standardized unit string
+        """
+        return unit_manager.standardize_unit(unit_str)
+    
+    def convert_values(self, values: Union[float, List[float], pd.Series], 
+                      from_unit: str, to_unit: str) -> Union[float, List[float], pd.Series]:
+        """
+        Convert values from one unit to another
+        
+        Parameters
+        ----------
+        values : Union[float, List[float], pd.Series]
+            Value(s) to convert
+        from_unit : str
+            Source unit
+        to_unit : str
+            Target unit
+            
+        Returns
+        -------
+        Union[float, List[float], pd.Series]
+            Converted value(s)
+            
+        Raises
+        ------
+        ValueError
+            If units are incompatible or cannot be parsed
+        """
+        if isinstance(values, (int, float)):
+            return unit_manager.convert_value(values, from_unit, to_unit)
+        elif isinstance(values, list):
+            return [unit_manager.convert_value(v, from_unit, to_unit) for v in values]
+        elif isinstance(values, pd.Series):
+            return values.apply(lambda x: unit_manager.convert_value(x, from_unit, to_unit))
+        else:
+            raise ValueError(f"Unsupported value type: {type(values)}")
+    
+    def are_units_compatible(self, unit1: str, unit2: str) -> bool:
+        """
+        Check if two units are dimensionally compatible
+        
+        Parameters
+        ----------
+        unit1 : str
+            First unit
+        unit2 : str
+            Second unit
+            
+        Returns
+        -------
+        bool
+            True if units are compatible for conversion
+        """
+        return unit_manager.are_compatible(unit1, unit2)
+    
+    def get_unit_dimensionality(self, unit_str: str) -> str:
+        """
+        Get the dimensionality of a unit
+        
+        Parameters
+        ----------
+        unit_str : str
+            Unit string
+            
+        Returns
+        -------
+        str
+            Dimensionality (e.g., '[mass] / [length] ** 3')
+        """
+        return unit_manager.get_unit_dimensionality(unit_str)
+    
+    def suggest_compatible_units(self, unit_str: str) -> List[str]:
+        """
+        Suggest compatible units for a given unit
+        
+        Parameters
+        ----------
+        unit_str : str
+            Unit string
+            
+        Returns
+        -------
+        List[str]
+            List of compatible units
+        """
+        dimensionality = unit_manager.get_unit_dimensionality(unit_str)
+        return unit_manager.suggest_common_units(dimensionality)
+    
+    def convert_parameter_data(self, data: pd.DataFrame, target_unit: str) -> pd.DataFrame:
+        """
+        Convert parameter data to a target unit
+        
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Parameter data with 'value' and 'unit' columns
+        target_unit : str
+            Target unit for conversion
+            
+        Returns
+        -------
+        pd.DataFrame
+            Data with converted values and updated unit column
+            
+        Raises
+        ------
+        ValueError
+            If data doesn't have required columns or units are incompatible
+        """
+        if 'value' not in data.columns:
+            raise ValueError("Data must contain 'value' column")
+        
+        if 'unit' not in data.columns:
+            raise ValueError("Data must contain 'unit' column")
+        
+        # Create a copy to avoid modifying original data
+        result = data.copy()
+        
+        # Get the source unit (assuming all rows have the same unit)
+        source_unit = data['unit'].iloc[0]
+        
+        # Check compatibility
+        if not self.are_units_compatible(source_unit, target_unit):
+            raise ValueError(f"Cannot convert from {source_unit} to {target_unit}: units are not compatible")
+        
+        # Convert values
+        result['value'] = self.convert_values(data['value'], source_unit, target_unit)
+        result['unit'] = target_unit
+        
+        return result
+    
+    def calculate_mass_flow_advanced(self, concentration_data: pd.DataFrame, 
+                                   flow_data: pd.DataFrame,
+                                   concentration_unit: Optional[str] = None,
+                                   flow_unit: Optional[str] = None,
+                                   target_unit: str = 'kg/h') -> pd.DataFrame:
+        """
+        Calculate mass flow with explicit unit handling
+        
+        Parameters
+        ----------
+        concentration_data : pd.DataFrame
+            Concentration data
+        flow_data : pd.DataFrame
+            Flow data
+        concentration_unit : str, optional
+            Unit for concentration (if not in data)
+        flow_unit : str, optional
+            Unit for flow (if not in data)
+        target_unit : str
+            Target unit for mass flow
+            
+        Returns
+        -------
+        pd.DataFrame
+            Mass flow calculations with proper unit handling
+        """
+        # Extract units from data or use provided units
+        conc_unit = concentration_unit or concentration_data.get('unit', pd.Series()).iloc[0] if len(concentration_data) > 0 else 'mg/L'
+        f_unit = flow_unit or flow_data.get('unit', pd.Series()).iloc[0] if len(flow_data) > 0 else 'm³/h'
+        
+        # Use the mass flow calculator with explicit units
+        return self.massflow_calculator.apply_mass_flow_calculation(
+            concentration_data, flow_data, target_unit
+        )
+    
+    def get_parameter_units_summary(self) -> pd.DataFrame:
+        """
+        Get a summary of all parameter units in the database
+        
+        Returns
+        -------
+        pd.DataFrame
+            Summary of parameters with unit information
+        """
+        # Get all parameters
+        parameters = self.get_parameters()
+        
+        if parameters.empty:
+            return pd.DataFrame()
+        
+        # Add unit metadata for each parameter
+        unit_info = []
+        for _, param in parameters.iterrows():
+            unit = param.get('unit', '')
+            try:
+                unit_info.append({
+                    'parameter_code': param.get('code', ''),
+                    'parameter_name': param.get('name', ''),
+                    'unit': unit,
+                    'unit_standardized': unit_manager.standardize_unit(unit),
+                    'dimensionality': unit_manager.get_unit_dimensionality(unit),
+                    'compatible_units': ', '.join(unit_manager.suggest_common_units(
+                        unit_manager.get_unit_dimensionality(unit)
+                    ))
+                })
+            except Exception as e:
+                logger.warning(f"Could not process unit for parameter {param.get('code', '')}: {e}")
+                unit_info.append({
+                    'parameter_code': param.get('code', ''),
+                    'parameter_name': param.get('name', ''),
+                    'unit': unit,
+                    'unit_standardized': unit,
+                    'dimensionality': 'unknown',
+                    'compatible_units': ''
+                })
+        
+        return pd.DataFrame(unit_info) 

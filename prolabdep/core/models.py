@@ -5,7 +5,12 @@ from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 import pandas as pd
+from typing import Dict, List, Optional
+import logging
 
+from ..utils.units import unit_manager
+
+logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -117,10 +122,122 @@ class Parameter(Base):
     def __repr__(self):
         return f"<Parameter(code='{self.code}', name='{self.name}', unit='{self.unit}')>"
     
+    @property
+    def unit_standardized(self) -> str:
+        """
+        Get standardized unit using Pint
+        
+        Returns
+        -------
+        str
+            Standardized unit string
+        """
+        if not self.unit:
+            return 'dimensionless'
+        
+        try:
+            return unit_manager.standardize_unit(self.unit)
+        except Exception as e:
+            logger.warning(f"Could not standardize unit '{self.unit}': {e}")
+            return self.unit
+    
+    @property
+    def unit_dimensionality(self) -> str:
+        """
+        Get unit dimensionality using Pint
+        
+        Returns
+        -------
+        str
+            Unit dimensionality
+        """
+        if not self.unit:
+            return "dimensionless"
+        
+        try:
+            return unit_manager.get_unit_dimensionality(self.unit)
+        except Exception as e:
+            logger.warning(f"Could not get dimensionality for unit '{self.unit}': {e}")
+            return "unknown"
+    
+    def is_unit_compatible_with(self, other_unit: str) -> bool:
+        """
+        Check if this parameter's unit is compatible with another unit
+        
+        Parameters
+        ----------
+        other_unit : str
+            Unit to check compatibility with
+            
+        Returns
+        -------
+        bool
+            True if units are compatible
+        """
+        if not self.unit:
+            return other_unit in ['', 'dimensionless', '-']
+        
+        try:
+            return unit_manager.are_compatible(self.unit, other_unit)
+        except Exception as e:
+            logger.warning(f"Could not check compatibility between '{self.unit}' and '{other_unit}': {e}")
+            return False
+    
+    def convert_value(self, value: float, target_unit: str) -> float:
+        """
+        Convert a value from this parameter's unit to a target unit
+        
+        Parameters
+        ----------
+        value : float
+            Value to convert
+        target_unit : str
+            Target unit
+            
+        Returns
+        -------
+        float
+            Converted value
+            
+        Raises
+        ------
+        ValueError
+            If units are not compatible or conversion fails
+        """
+        if not self.unit:
+            if target_unit in ['', 'dimensionless', '-']:
+                return value
+            else:
+                raise ValueError(f"Cannot convert dimensionless value to {target_unit}")
+        
+        try:
+            return unit_manager.convert_value(value, self.unit, target_unit)
+        except Exception as e:
+            raise ValueError(f"Cannot convert {value} from {self.unit} to {target_unit}: {e}")
+    
+    def suggest_compatible_units(self) -> List[str]:
+        """
+        Suggest compatible units for this parameter
+        
+        Returns
+        -------
+        List[str]
+            List of compatible units
+        """
+        if not self.unit:
+            return ['dimensionless', '-']
+        
+        try:
+            dimensionality = self.unit_dimensionality
+            return unit_manager.suggest_common_units(dimensionality)
+        except Exception as e:
+            logger.warning(f"Could not suggest units for '{self.unit}': {e}")
+            return []
+    
     @classmethod
     def from_dataframe(cls, df: pd.DataFrame) -> list:
         """
-        Create Parameter objects from a dataframe
+        Create Parameter objects from a dataframe with unit standardization
         
         Parameters
         ----------
@@ -147,12 +264,23 @@ class Parameter(Base):
             return []
             
         for _, row in df.iterrows():
+            # Get original unit
+            original_unit = row[unit_col] if unit_col else None
+            
+            # Standardize unit if possible
+            standardized_unit = original_unit
+            if original_unit:
+                try:
+                    standardized_unit = unit_manager.standardize_unit(original_unit)
+                except Exception as e:
+                    logger.warning(f"Could not standardize unit '{original_unit}': {e}")
+            
             param = cls(
                 code=row[code_col],
                 name=row[name_col],
                 name_std=row[name_std_col] if name_std_col and name_std_col in row else row[name_col],  # Use standardized if available
                 method=row[method_col] if method_col else None,
-                unit=row[unit_col] if unit_col else None,
+                unit=standardized_unit,  # Use standardized unit
                 description=row[desc_col] if desc_col else ''
             )
             parameters.append(param)
@@ -160,14 +288,14 @@ class Parameter(Base):
     
     def to_dict(self) -> dict:
         """
-        Convert Parameter to dictionary
+        Convert Parameter to dictionary with unit information
         
         Returns
         -------
         dict
-            Dictionary representation of Parameter
+            Dictionary representation of Parameter with unit metadata
         """
-        return {
+        result = {
             'code': self.code,
             'name': self.name,
             'name_std': self.name_std,
@@ -175,6 +303,18 @@ class Parameter(Base):
             'unit': self.unit,
             'description': self.description
         }
+        
+        # Add unit metadata
+        try:
+            result.update({
+                'unit_standardized': self.unit_standardized,
+                'unit_dimensionality': self.unit_dimensionality,
+                'compatible_units': self.suggest_compatible_units()
+            })
+        except Exception as e:
+            logger.warning(f"Could not add unit metadata for parameter {self.code}: {e}")
+        
+        return result
 
 
 class Measurement(Base):

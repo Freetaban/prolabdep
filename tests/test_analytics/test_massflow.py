@@ -61,8 +61,8 @@ def flow_data():
 
 def test_calculate_mass_flow_basic(massflow_calculator):
     """Test basic mass flow calculation with known inputs."""
-    # Test case: 200 mg/L and 100 m3/h should give 20 kg/h
-    # 200 mg/L * 100 m3/h / 1,000,000 = 0.02 kg/h
+    # Test case: 200 mg/L and 100 m³/h should give 20 kg/h
+    # 200 mg/L * 100 m³/h = 200 * 100 * 10^-6 kg/h = 20 kg/h
     mass_flow = massflow_calculator.calculate_mass_flow(
         concentration=200,
         flow=100,
@@ -71,12 +71,12 @@ def test_calculate_mass_flow_basic(massflow_calculator):
         output_unit='kg/h'
     )
     
-    assert mass_flow == pytest.approx(0.02, abs=0.0001)
+    assert mass_flow == pytest.approx(20.0, abs=0.001)
 
 
 def test_unit_conversions(massflow_calculator):
     """Test mass flow calculations with different units."""
-    # Base case: 200 mg/L and 100 m3/h = 0.02 kg/h
+    # Base case: 200 mg/L and 100 m³/h = 20 kg/h
     base_mass_flow = massflow_calculator.calculate_mass_flow(
         concentration=200,
         flow=100,
@@ -86,7 +86,7 @@ def test_unit_conversions(massflow_calculator):
     )
     
     # Test concentration unit conversion (g/L)
-    # 0.2 g/L and 100 m3/h = 20 kg/h
+    # 0.2 g/L and 100 m³/h = 20 kg/h (same as 200 mg/L)
     mass_flow_g_l = massflow_calculator.calculate_mass_flow(
         concentration=0.2,
         flow=100,
@@ -94,10 +94,10 @@ def test_unit_conversions(massflow_calculator):
         flow_unit='m3/h',
         output_unit='kg/h'
     )
-    assert mass_flow_g_l == pytest.approx(0.02, abs=0.0001)
+    assert mass_flow_g_l == pytest.approx(20.0, abs=0.001)
     
     # Test flow unit conversion (L/s)
-    # 200 mg/L and 27.78 L/s (= 100 m3/h) = 0.02 kg/h
+    # 200 mg/L and 27.78 L/s (≈ 100 m³/h) = 20 kg/h
     mass_flow_l_s = massflow_calculator.calculate_mass_flow(
         concentration=200,
         flow=27.78,
@@ -105,10 +105,10 @@ def test_unit_conversions(massflow_calculator):
         flow_unit='l/s',
         output_unit='kg/h'
     )
-    assert mass_flow_l_s == pytest.approx(0.02, abs=0.0001)
+    assert mass_flow_l_s == pytest.approx(20.0, abs=0.1)
     
     # Test output unit conversion (kg/d)
-    # 200 mg/L and 100 m3/h = 0.48 kg/d
+    # 200 mg/L and 100 m³/h = 480 kg/d (20 kg/h * 24 h/d)
     mass_flow_kg_d = massflow_calculator.calculate_mass_flow(
         concentration=200,
         flow=100,
@@ -116,7 +116,7 @@ def test_unit_conversions(massflow_calculator):
         flow_unit='m3/h',
         output_unit='kg/d'
     )
-    assert mass_flow_kg_d == pytest.approx(0.48, abs=0.001)  # 0.02 kg/h * 24 h/d = 0.48 kg/d
+    assert mass_flow_kg_d == pytest.approx(480.0, abs=1.0)
 
 
 def test_extract_unit(massflow_calculator):
@@ -160,22 +160,22 @@ def test_apply_mass_flow_calculation(concentration_data, flow_data, massflow_cal
         output_unit='kg/h'
     )
     
-    # Check result structure
+    # Check result structure (updated column names for Pint integration)
     assert 'date' in mass_flow_data.columns
     assert 'concentration' in mass_flow_data.columns
     assert 'flow' in mass_flow_data.columns
     assert 'mass_flow' in mass_flow_data.columns
-    assert 'unit' in mass_flow_data.columns
+    assert 'mass_flow_unit' in mass_flow_data.columns  # Updated column name
     
     # Check number of rows
     assert len(mass_flow_data) == len(concentration_data)
     
     # Check specific mass flow calculations
-    # First row: 200 mg/L * 100 m3/h / 1,000,000 = 0.02 kg/h
-    assert mass_flow_data['mass_flow'].iloc[0] == pytest.approx(0.02, abs=0.0001)
+    # First row: 200 mg/L * 100 m³/h = 20 kg/h
+    assert mass_flow_data['mass_flow'].iloc[0] == pytest.approx(20.0, abs=0.1)
     
     # Check unit
-    assert mass_flow_data['unit'].iloc[0] == 'kg/h'
+    assert mass_flow_data['mass_flow_unit'].iloc[0] == 'kg/h'
     
     # Test with a different output unit
     mass_flow_data_kg_d = massflow_calculator.apply_mass_flow_calculation(
@@ -184,9 +184,9 @@ def test_apply_mass_flow_calculation(concentration_data, flow_data, massflow_cal
         output_unit='kg/d'
     )
     
-    # Check conversion: 0.02 kg/h * 24 h/d = 0.48 kg/d
-    assert mass_flow_data_kg_d['mass_flow'].iloc[0] == pytest.approx(0.48, abs=0.001)
-    assert mass_flow_data_kg_d['unit'].iloc[0] == 'kg/d'
+    # Check conversion: 20 kg/h * 24 h/d = 480 kg/d
+    assert mass_flow_data_kg_d['mass_flow'].iloc[0] == pytest.approx(480.0, abs=1.0)
+    assert mass_flow_data_kg_d['mass_flow_unit'].iloc[0] == 'kg/d'
 
 
 def test_invalid_inputs(massflow_calculator):
