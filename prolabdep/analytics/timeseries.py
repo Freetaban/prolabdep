@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List, Union, Optional, Any
 import logging
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +21,14 @@ class TimeSeriesAnalyzer:
     
     def __init__(self):
         """Initialize time series analyzer"""
-        pass
+        # Set matplotlib backend for better performance
+        plt.rcParams['figure.max_open_warning'] = 50
+        plt.rcParams['agg.path.chunksize'] = 10000
     
     def resample(self, data: pd.DataFrame, frequency: str = 'D', 
                 method: str = 'mean') -> pd.DataFrame:
         """
-        Resample time series data to a different frequency
+        Resample time series data to a different frequency with optimized performance
         
         Parameters
         ----------
@@ -48,37 +51,42 @@ class TimeSeriesAnalyzer:
         # Copy data to avoid modifying original
         df = data.copy()
         
+        # Ensure date column is datetime
+        if not pd.api.types.is_datetime64_any_dtype(df['date']):
+            df['date'] = pd.to_datetime(df['date'])
+        
         # Set date as index
         df = df.set_index('date')
         
-        # Select aggregation method
-        if method == 'mean':
-            agg_func = np.mean
-        elif method == 'median':
-            agg_func = np.median
-        elif method == 'min':
-            agg_func = np.min
-        elif method == 'max':
-            agg_func = np.max
-        elif method == 'sum':
-            agg_func = np.sum
-        else:
-            raise ValueError(f"Unknown aggregation method: {method}")
+        # Validate aggregation method
+        valid_methods = ['mean', 'median', 'min', 'max', 'sum', 'std', 'count']
+        if method not in valid_methods:
+            raise ValueError(f"Unknown aggregation method: {method}. Valid methods: {valid_methods}")
+        
+        # Select numeric columns for aggregation
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        categorical_cols = df.select_dtypes(exclude=[np.number]).columns
+        
+        # Prepare result dataframe
+        result_parts = []
         
         # Resample numeric columns
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if not numeric_cols.empty:
+            numeric_resampled = df[numeric_cols].resample(frequency).agg(method)
+            result_parts.append(numeric_resampled)
         
-        # Group by frequency and aggregate
-        result = df[numeric_cols].resample(frequency).agg(agg_func)
-        
-        # Add non-numeric columns with mode aggregation
-        categorical_cols = df.select_dtypes(exclude=[np.number]).columns
+        # Handle categorical columns separately
         if not categorical_cols.empty:
-            for col in categorical_cols:
-                # Use most common value for categorical data
-                result[col] = df[col].resample(frequency).apply(
-                    lambda x: x.mode()[0] if not x.empty and len(x.mode()) > 0 else None
-                )
+            categorical_resampled = df[categorical_cols].resample(frequency).agg(
+                lambda x: x.mode().iloc[0] if not x.empty and not x.mode().empty else None
+            )
+            result_parts.append(categorical_resampled)
+        
+        # Combine results
+        if result_parts:
+            result = pd.concat(result_parts, axis=1)
+        else:
+            result = pd.DataFrame()
         
         # Reset index for consistent return format
         result = result.reset_index()
@@ -88,9 +96,11 @@ class TimeSeriesAnalyzer:
     def plot_time_series(self, data: pd.DataFrame, 
                        parameter_name: Optional[str] = None,
                        title: Optional[str] = None,
-                       include_trend: bool = True) -> plt.Figure:
+                       include_trend: bool = True,
+                       figsize: tuple = (12, 6),
+                       style: str = 'seaborn-v0_8') -> plt.Figure:
         """
-        Create a time series plot
+        Create an optimized time series plot
         
         Parameters
         ----------
@@ -102,6 +112,10 @@ class TimeSeriesAnalyzer:
             Plot title
         include_trend : bool
             Whether to include trend line
+        figsize : tuple
+            Figure size (width, height)
+        style : str
+            Plot style
             
         Returns
         -------
@@ -111,66 +125,117 @@ class TimeSeriesAnalyzer:
         if 'date' not in data.columns or 'value' not in data.columns:
             raise ValueError("Data must contain 'date' and 'value' columns")
         
-        # Create figure and axis
-        fig, ax = plt.subplots(figsize=(10, 6))
+        # Remove rows with NaN values for better plotting
+        clean_data = data.dropna(subset=['date', 'value'])
         
-        # Plot data
-        ax.plot(data['date'], data['value'], 'o-', label='Measurements')
+        if clean_data.empty:
+            raise ValueError("No valid data points to plot")
         
-        # Add trend line if requested
-        if include_trend and len(data) > 1:
-            try:
-                # Convert dates to numeric for regression
-                x = pd.to_numeric(pd.to_datetime(data['date']))
-                y = data['value']
-                
-                # Simple linear regression
-                z = np.polyfit(x, y, 1)
-                p = np.poly1d(z)
-                
-                # Generate x values for trend line
-                x_dates = pd.to_datetime(data['date'])
-                x_trend = pd.date_range(min(x_dates), max(x_dates), periods=100)
-                x_numeric = pd.to_numeric(x_trend)
-                
-                # Plot trend line
-                ax.plot(x_trend, p(x_numeric), 'r--', label='Trend')
-                
-                # Add trend equation to legend
-                slope = z[0]
-                ax.legend(title=f"Trend: {'↑' if slope > 0 else '↓' if slope < 0 else '→'}")
-            except Exception as e:
-                logger.warning(f"Could not calculate trend line: {str(e)}")
+        # Set plot style
+        with plt.style.context(style):
+            # Create figure with optimized settings
+            fig, ax = plt.subplots(figsize=figsize, dpi=100)
+            
+            # Convert dates to datetime if needed
+            dates = pd.to_datetime(clean_data['date'])
+            values = clean_data['value'].astype(float)
+            
+            # Plot data with optimized parameters
+            line = ax.plot(dates, values, 'o-', 
+                          linewidth=1.5, 
+                          markersize=4, 
+                          alpha=0.8,
+                          label='Measurements')
+            
+            # Add trend line if requested and feasible
+            if include_trend and len(clean_data) > 1:
+                try:
+                    self._add_trend_line(ax, dates, values)
+                except Exception as e:
+                    logger.warning(f"Could not calculate trend line: {str(e)}")
+            
+            # Optimize axis formatting
+            self._format_plot(ax, parameter_name, title, clean_data)
+            
+            # Tight layout for better spacing
+            fig.tight_layout()
+            
+            return fig
+    
+    def _add_trend_line(self, ax: plt.Axes, dates: pd.Series, values: pd.Series) -> None:
+        """Add trend line to plot with optimized calculation"""
+        # Convert dates to numeric for regression
+        x_numeric = dates.astype(np.int64) // 10**9  # Convert to seconds
         
-        # Set labels and title
+        # Use numpy for faster polynomial fitting
+        coeffs = np.polyfit(x_numeric, values, 1)
+        trend_line = np.poly1d(coeffs)
+        
+        # Generate smooth trend line
+        x_trend = np.linspace(x_numeric.min(), x_numeric.max(), 100)
+        dates_trend = pd.to_datetime(x_trend * 10**9)
+        y_trend = trend_line(x_trend)
+        
+        # Plot trend line
+        ax.plot(dates_trend, y_trend, 'r--', 
+               linewidth=2, alpha=0.7, label='Trend')
+        
+        # Add trend info to legend
+        slope = coeffs[0]
+        trend_direction = '↑' if slope > 0 else '↓' if slope < 0 else '→'
+        ax.legend(title=f"Trend: {trend_direction}")
+    
+    def _format_plot(self, ax: plt.Axes, parameter_name: Optional[str], 
+                    title: Optional[str], data: pd.DataFrame) -> None:
+        """Format plot with optimized settings"""
+        # Set labels
         if parameter_name:
-            unit = data['unit'].iloc[0] if 'unit' in data.columns else ''
-            if unit:
-                ax.set_ylabel(f"{parameter_name} ({unit})")
-            else:
-                ax.set_ylabel(parameter_name)
+            unit = data['unit'].iloc[0] if 'unit' in data.columns and not data['unit'].empty else ''
+            ylabel = f"{parameter_name} ({unit})" if unit else parameter_name
         else:
-            ax.set_ylabel('Value')
+            ylabel = 'Value'
         
-        ax.set_xlabel('Date')
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_xlabel('Date', fontsize=12)
         
+        # Set title
         if title:
-            ax.set_title(title)
+            ax.set_title(title, fontsize=14, fontweight='bold')
         elif parameter_name:
-            ax.set_title(f"{parameter_name} Time Series")
+            ax.set_title(f"{parameter_name} Time Series", fontsize=14)
         else:
-            ax.set_title("Time Series")
+            ax.set_title("Time Series", fontsize=14)
         
-        # Format x-axis
+        # Format axes
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        
+        # Auto-format date axis
+        fig = ax.get_figure()
         fig.autofmt_xdate()
         
-        # Add grid
-        ax.grid(True, linestyle='--', alpha=0.7)
-        
-        return fig
+        # Add statistics text box if data is available
+        if len(data) > 0:
+            self._add_stats_box(ax, data['value'])
     
-    # Alias for backward compatibility
-    plot_timeseries = plot_time_series
+    def _add_stats_box(self, ax: plt.Axes, values: pd.Series) -> None:
+        """Add statistics text box to plot"""
+        stats = {
+            'Count': len(values),
+            'Mean': f"{values.mean():.2f}",
+            'Std': f"{values.std():.2f}",
+            'Min': f"{values.min():.2f}",
+            'Max': f"{values.max():.2f}"
+        }
+        
+        stats_text = '\n'.join([f"{k}: {v}" for k, v in stats.items()])
+        
+        # Add text box
+        ax.text(0.02, 0.98, stats_text, 
+               transform=ax.transAxes, 
+               verticalalignment='top',
+               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+               fontsize=9)
     
     def plot_comparison(self, data_list: List[pd.DataFrame], 
                        labels: List[str],

@@ -18,7 +18,9 @@ class Sample(Base):
     date = Column(DateTime, index=True)
     municipality = Column(String, index=True)
     site = Column(String, index=True)
+    site_std = Column(String, index=True)  # Standardized site name
     sampling_point = Column(String, index=True)
+    sampling_point_std = Column(String, index=True)  # Standardized sampling point
     reason = Column(String)
     sampling_method = Column(String)
     status = Column(String)
@@ -65,7 +67,9 @@ class Sample(Base):
                 date=row.get(date_column),
                 municipality=row.get('municipality'),
                 site=row.get('site'),
+                site_std=row.get('site_std', row.get('site')),  # Use standardized if available
                 sampling_point=row.get('sampling_point'),
+                sampling_point_std=row.get('sampling_point_std', row.get('sampling_point')),  # Use standardized if available
                 reason=row.get('motivo_prelievo', row.get('reason')),
                 sampling_method=row.get('modo_prelievo', row.get('sampling_method')),
                 status=row.get('stato', row.get('status'))
@@ -87,7 +91,9 @@ class Sample(Base):
             'date': self.date,
             'municipality': self.municipality,
             'site': self.site,
+            'site_std': self.site_std,
             'sampling_point': self.sampling_point,
+            'sampling_point_std': self.sampling_point_std,
             'reason': self.reason,
             'sampling_method': self.sampling_method,
             'status': self.status
@@ -100,6 +106,7 @@ class Parameter(Base):
     
     code = Column(String, primary_key=True)  # codice_param
     name = Column(String, index=True)
+    name_std = Column(String, index=True)  # Standardized parameter name
     method = Column(String)
     unit = Column(String)
     description = Column(String)
@@ -130,6 +137,7 @@ class Parameter(Base):
         # Map various column names to standard names
         code_col = next((col for col in ['codice_param', 'code'] if col in df.columns), None)
         name_col = next((col for col in ['nome_param', 'name'] if col in df.columns), None)
+        name_std_col = next((col for col in ['nome_param_std', 'name_std'] if col in df.columns), None)
         method_col = next((col for col in ['metodo', 'method'] if col in df.columns), None)
         unit_col = next((col for col in ['udm', 'unit'] if col in df.columns), None)
         desc_col = next((col for col in ['descrizione', 'description'] if col in df.columns), None)
@@ -142,6 +150,7 @@ class Parameter(Base):
             param = cls(
                 code=row[code_col],
                 name=row[name_col],
+                name_std=row[name_std_col] if name_std_col and name_std_col in row else row[name_col],  # Use standardized if available
                 method=row[method_col] if method_col else None,
                 unit=row[unit_col] if unit_col else None,
                 description=row[desc_col] if desc_col else ''
@@ -161,6 +170,7 @@ class Parameter(Base):
         return {
             'code': self.code,
             'name': self.name,
+            'name_std': self.name_std,
             'method': self.method,
             'unit': self.unit,
             'description': self.description

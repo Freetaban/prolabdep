@@ -41,4 +41,13 @@ def test_import_visualization():
 def test_import_api():
     """Test importing API modules"""
     from prolabdep.api import Client
-    assert Client is not None 
+    assert Client is not None
+
+def test_import_utils():
+    """Test importing utility modules"""
+    from prolabdep.utils.standardization import (
+        StandardizationMappings, default_mappings, standardize_location_info
+    )
+    assert StandardizationMappings is not None
+    assert default_mappings is not None
+    assert standardize_location_info is not None 

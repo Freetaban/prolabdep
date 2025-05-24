@@ -3,9 +3,12 @@ Main client interface for ProlabDep
 """
 import os
 import uuid
+import logging
 from typing import Dict, List, Optional, Union, Any
 import pandas as pd
 from datetime import datetime
+from functools import lru_cache
+from contextlib import contextmanager
 
 from prolabdep.core.config import Config
 from prolabdep.core.database import Database
@@ -17,7 +20,9 @@ from prolabdep.analytics.trends import TrendAnalyzer
 from prolabdep.exporters.excel import ExcelExporter
 from prolabdep.exporters.csv import CSVExporter
 from prolabdep.exporters.pdf import PDFExporter
+from prolabdep.utils.standardization import default_mappings
 
+logger = logging.getLogger(__name__)
 
 class Client:
     """
@@ -45,27 +50,103 @@ class Client:
         # Initialize database
         self.db = Database(db_path or self.config.get('database', {}).get('path', 'prolabdep.db'))
         
-        # Initialize processors
-        self.csv_processor = CSVProcessor(self.config)
-        self.excel_processor = ExcelProcessor(self.config)
+        # Lazy initialization for processors and analyzers
+        self._processors = {}
+        self._analyzers = {}
+        self._exporters = {}
         
-        # Initialize analyzers
-        self.timeseries_analyzer = TimeSeriesAnalyzer()
-        self.statistics_analyzer = StatisticsAnalyzer()
-        self.massflow_calculator = MassFlowCalculator()
-        self.trend_analyzer = TrendAnalyzer()
-        
-        # Initialize exporters
-        self.excel_exporter = ExcelExporter()
-        self.csv_exporter = CSVExporter()
-        self.pdf_exporter = PDFExporter()
-        
-        # Data cache
+        # Data cache with TTL-like behavior
         self._data_cache = {}
+        self._cache_timestamps = {}
+        self._cache_ttl = 300  # 5 minutes default TTL
+    
+    @property
+    def csv_processor(self):
+        """Lazy-loaded CSV processor"""
+        if 'csv' not in self._processors:
+            self._processors['csv'] = CSVProcessor(self.config)
+        return self._processors['csv']
+    
+    @property
+    def excel_processor(self):
+        """Lazy-loaded Excel processor"""
+        if 'excel' not in self._processors:
+            self._processors['excel'] = ExcelProcessor(self.config)
+        return self._processors['excel']
+    
+    @property
+    def timeseries_analyzer(self):
+        """Lazy-loaded timeseries analyzer"""
+        if 'timeseries' not in self._analyzers:
+            self._analyzers['timeseries'] = TimeSeriesAnalyzer()
+        return self._analyzers['timeseries']
+    
+    @property
+    def statistics_analyzer(self):
+        """Lazy-loaded statistics analyzer"""
+        if 'statistics' not in self._analyzers:
+            self._analyzers['statistics'] = StatisticsAnalyzer()
+        return self._analyzers['statistics']
+    
+    @property
+    def massflow_calculator(self):
+        """Lazy-loaded mass flow calculator"""
+        if 'massflow' not in self._analyzers:
+            self._analyzers['massflow'] = MassFlowCalculator()
+        return self._analyzers['massflow']
+    
+    @property
+    def trend_analyzer(self):
+        """Lazy-loaded trend analyzer"""
+        if 'trend' not in self._analyzers:
+            self._analyzers['trend'] = TrendAnalyzer()
+        return self._analyzers['trend']
+    
+    @property
+    def excel_exporter(self):
+        """Lazy-loaded Excel exporter"""
+        if 'excel' not in self._exporters:
+            self._exporters['excel'] = ExcelExporter()
+        return self._exporters['excel']
+    
+    @property
+    def csv_exporter(self):
+        """Lazy-loaded CSV exporter"""
+        if 'csv' not in self._exporters:
+            self._exporters['csv'] = CSVExporter()
+        return self._exporters['csv']
+    
+    @property
+    def pdf_exporter(self):
+        """Lazy-loaded PDF exporter"""
+        if 'pdf' not in self._exporters:
+            self._exporters['pdf'] = PDFExporter()
+        return self._exporters['pdf']
+    
+    def _is_cache_valid(self, cache_key: str) -> bool:
+        """Check if cache entry is still valid"""
+        if cache_key not in self._cache_timestamps:
+            return False
+        
+        age = (datetime.now() - self._cache_timestamps[cache_key]).total_seconds()
+        return age < self._cache_ttl
+    
+    def _get_from_cache(self, cache_key: str) -> Optional[Any]:
+        """Get data from cache if valid"""
+        if cache_key in self._data_cache and self._is_cache_valid(cache_key):
+            logger.debug(f"Cache hit for key: {cache_key}")
+            return self._data_cache[cache_key].copy() if hasattr(self._data_cache[cache_key], 'copy') else self._data_cache[cache_key]
+        return None
+    
+    def _set_cache(self, cache_key: str, data: Any) -> None:
+        """Set data in cache"""
+        self._data_cache[cache_key] = data
+        self._cache_timestamps[cache_key] = datetime.now()
+        logger.debug(f"Cache set for key: {cache_key}")
     
     def import_data(self, file_path: str, name: Optional[str] = None) -> str:
         """
-        Import data from a file
+        Import data from a file with optimized processing
         
         Parameters
         ----------
@@ -85,6 +166,8 @@ class Client:
         # Determine file type from extension
         file_extension = os.path.splitext(file_path)[1].lower()
         
+        logger.info(f"Importing data from {file_path} with extension {file_extension}")
+        
         # Process data based on file type
         if file_extension in ['.csv']:
             data_dict = self.csv_processor.process(file_path)
@@ -94,7 +177,7 @@ class Client:
             raise ValueError(f"Unsupported file type: {file_extension}")
         
         # Store data in database
-        self.db.store_data(data_dict)
+        measurements_count = self.db.store_data(data_dict)
         
         # Cache dataset information
         self._data_cache[data_id] = {
@@ -102,13 +185,29 @@ class Client:
             'file_path': file_path,
             'import_date': datetime.now(),
             'file_type': file_extension,
+            'measurements_count': measurements_count,
         }
         
+        # Invalidate related caches
+        self._invalidate_data_caches()
+        
+        logger.info(f"Successfully imported {measurements_count} measurements with ID: {data_id}")
         return data_id
     
+    def _invalidate_data_caches(self):
+        """Invalidate caches that depend on data"""
+        cache_keys_to_remove = [
+            key for key in self._data_cache.keys() 
+            if key.startswith(('parameters_', 'samples_', 'timeseries_'))
+        ]
+        for key in cache_keys_to_remove:
+            self._data_cache.pop(key, None)
+            self._cache_timestamps.pop(key, None)
+
+    @lru_cache(maxsize=100)
     def get_parameters(self, data_id: Optional[str] = None) -> pd.DataFrame:
         """
-        Get parameters from a dataset
+        Get parameters from a dataset with caching
         
         Parameters
         ----------
@@ -120,8 +219,20 @@ class Client:
         pd.DataFrame
             Dataframe of parameters
         """
+        cache_key = f"parameters_{data_id or 'all'}"
+        
+        # Check cache first
+        cached_result = self._get_from_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
+        
         # Retrieve from database
-        return self.db.get_parameters()
+        result = self.db.get_parameters()
+        
+        # Cache the result
+        self._set_cache(cache_key, result)
+        
+        return result
     
     def get_samples(self, data_id: Optional[str] = None, 
                    municipality: Optional[str] = None, 
@@ -167,7 +278,8 @@ class Client:
                                 site: Optional[str] = None,
                                 sampling_point: Optional[str] = None,
                                 date_from: Optional[Union[str, datetime]] = None,
-                                date_to: Optional[Union[str, datetime]] = None) -> pd.DataFrame:
+                                date_to: Optional[Union[str, datetime]] = None,
+                                search_mode: str = 'exact') -> pd.DataFrame:
         """
         Get time series data for a parameter
         
@@ -187,6 +299,8 @@ class Client:
             Start date
         date_to : Union[str, datetime], optional
             End date
+        search_mode : str, optional
+            Search mode: 'exact', 'contains', or 'fuzzy'
             
         Returns
         -------
@@ -206,8 +320,8 @@ class Client:
         if date_to:
             filter_criteria['date_to'] = date_to
         
-        # Retrieve from database
-        return self.db.get_parameter_data(parameter, filter_criteria)
+        # Retrieve from database with specified search mode
+        return self.db.get_parameter_data(parameter, filter_criteria, search_mode)
     
     def analyze_statistics(self, data: pd.DataFrame) -> Dict[str, float]:
         """
@@ -414,4 +528,97 @@ class Client:
         """
         return self.trend_analyzer.detect_trends(
             data, window=window, threshold=threshold
-        ) 
+        )
+    
+    def find_similar_sites(self, site_name: str, cutoff: float = 0.6) -> List[str]:
+        """
+        Find similar site names
+        
+        Parameters
+        ----------
+        site_name : str
+            Site name to find matches for
+        cutoff : float, optional
+            Similarity threshold (0-1)
+            
+        Returns
+        -------
+        List[str]
+            List of similar site names
+        """
+        return default_mappings.find_similar_sites(site_name, cutoff)
+    
+    def find_similar_sampling_points(self, sampling_point: str, cutoff: float = 0.6) -> List[str]:
+        """
+        Find similar sampling point names
+        
+        Parameters
+        ----------
+        sampling_point : str
+            Sampling point name to find matches for
+        cutoff : float, optional
+            Similarity threshold (0-1)
+            
+        Returns
+        -------
+        List[str]
+            List of similar sampling point names
+        """
+        return default_mappings.find_similar_sampling_points(sampling_point, cutoff)
+    
+    def find_similar_parameters(self, parameter: str, cutoff: float = 0.6) -> List[str]:
+        """
+        Find similar parameter names
+        
+        Parameters
+        ----------
+        parameter : str
+            Parameter name to find matches for
+        cutoff : float, optional
+            Similarity threshold (0-1)
+            
+        Returns
+        -------
+        List[str]
+            List of similar parameter names
+        """
+        return default_mappings.find_similar_parameters(parameter, cutoff)
+    
+    def add_site_mapping(self, original: str, standardized: str) -> None:
+        """
+        Add a new site mapping
+        
+        Parameters
+        ----------
+        original : str
+            Original site name
+        standardized : str
+            Standardized site name
+        """
+        default_mappings.add_site_mapping(original, standardized)
+    
+    def add_sampling_point_mapping(self, original: str, standardized: str) -> None:
+        """
+        Add a new sampling point mapping
+        
+        Parameters
+        ----------
+        original : str
+            Original sampling point name
+        standardized : str
+            Standardized sampling point name
+        """
+        default_mappings.add_sampling_point_mapping(original, standardized)
+    
+    def add_parameter_mapping(self, original: str, standardized: str) -> None:
+        """
+        Add a new parameter mapping
+        
+        Parameters
+        ----------
+        original : str
+            Original parameter name
+        standardized : str
+            Standardized parameter name
+        """
+        default_mappings.add_parameter_mapping(original, standardized) 

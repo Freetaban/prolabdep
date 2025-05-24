@@ -146,8 +146,7 @@ def test_plot_time_series(time_series_data, time_series_analyzer):
     assert len(fig.axes[0].get_lines()) >= 1  # At least one line (data)
     
     # If trend is included, there should be at least 2 lines
-    if time_series_analyzer.plot_time_series == time_series_analyzer.plot_timeseries:
-        assert len(fig.axes[0].get_lines()) >= 2  # Data line and trend line
+    assert len(fig.axes[0].get_lines()) >= 2  # Data line and trend line
     
     # Clean up
     plt.close(fig)

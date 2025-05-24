@@ -302,6 +302,61 @@ client.export_to_csv(timeseries, csv_file)
 print(f"Data exported to CSV: {csv_file}")
 
 # %% [markdown]
+# ## 7. Standardization and Flexible Search
+# 
+# Standardization helps handle non-standardized data from the original CSV.
+# The package provides utilities for standardizing site names, sampling points, and parameters.
+# 
+# Show standardized parameter names
+print("\nStandardized Parameter Examples:")
+parameters = client.get_parameters()
+if not parameters.empty and 'name_std' in parameters.columns:
+    for i, (name, name_std) in enumerate(zip(parameters['name'].head(3), 
+                                           parameters['name_std'].head(3))):
+        print(f"  Original: {name:<15} -> Standardized: {name_std}")
+
+# Show standardized site names
+print("\nStandardized Site Examples:")
+samples = client.get_samples()
+if not samples.empty and 'site_std' in samples.columns:
+    for i, (site, site_std) in enumerate(zip(samples['site'].head(3), 
+                                           samples['site_std'].head(3))):
+        print(f"  Original: {site:<25} -> Standardized: {site_std}")
+
+# Demonstrate flexible search
+print("\nFlexible Search Examples:")
+parameter_to_search = "COD"  # Try with variations like "cod", "C.O.D", etc.
+
+print(f"\nSearching for parameter: {parameter_to_search}")
+
+# Try different search modes
+for search_mode in ['exact', 'contains', 'fuzzy']:
+    results = client.get_parameter_timeseries(
+        parameter=parameter_to_search,
+        search_mode=search_mode
+    )
+    print(f"  {search_mode.capitalize()} search found {len(results)} results")
+
+# Find similar names
+print("\nFinding Similar Names:")
+similar_params = client.find_similar_parameters("cod")
+print("Similar parameters to 'cod':")
+for param in similar_params[:3]:  # Show top 3
+    print(f"  - {param}")
+
+# Add custom mappings
+print("\nAdding Custom Mappings:")
+client.add_site_mapping("impianto test", "Test Plant")
+client.add_parameter_mapping("ossigeno disciolto", "DO")
+
+print("Testing custom mappings:")
+from prolabdep.utils.standardization import default_mappings
+print(f"'impianto test' standardized to: {default_mappings.standardize_site('impianto test')}")
+print(f"'ossigeno disciolto' standardized to: {default_mappings.standardize_parameter('ossigeno disciolto')}")
+
+print("\nTutorial completed!")
+
+# %% [markdown]
 # ## Conclusion
 # 
 # In this tutorial, we've learned how to:
@@ -313,5 +368,6 @@ print(f"Data exported to CSV: {csv_file}")
 # 5. Compare data from different sources
 # 6. Calculate mass flow
 # 7. Export data to different formats
+# 8. Use standardization and flexible search
 # 
 # The ProlabDep package provides a comprehensive set of tools for processing and analyzing wastewater treatment plant data from LIMS exports. 
